@@ -13,7 +13,7 @@ Readme first
 ============
 
 This file describes the Linux Driver for the JMicron(R) JMC250/JMC260 PCI-E Ethernet
-Adapter. Version 1.0.8.5 supports the 2.6.16 or above kernels.
+Adapter. Version 1.0.8.5 supports the 3.10.0 or above kernels.
 
 Install Requirement:
 1. Kernel srource HEAD

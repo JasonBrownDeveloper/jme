@@ -1118,7 +1118,11 @@ jme_alloc_and_feed_skb(struct jme_adapter *jme, int idx)
 		if (rxdesc->descwb.flags & cpu_to_le16(RXWBFLAG_TAGON)) {
 			u16 vid = le16_to_cpu(rxdesc->descwb.vlan);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
 			__vlan_hwaccel_put_tag(skb, vid);
+#else
+			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), vid);
+#endif
 			NET_STAT(jme).rx_bytes += 4;
 		}
 		jme->jme_rx(skb);
@@ -1361,14 +1365,17 @@ jme_set_physpeed_capability(struct jme_adapter *jme, u16 speed)
 	advert2 = jme_mdio_read(jme->dev, jme->mii_if.phy_id, MII_CTRL1000);
 	switch (speed) {
 	case SPEED_1000:
+		netif_info(jme, link, jme->dev, "Setting advertised speed to 1000/100/10");
 		advert = (advert|ADVERTISE_100HALF|ADVERTISE_100FULL);
 		advert2 = (advert2|ADVERTISE_1000HALF|ADVERTISE_1000FULL);
 		break;
 	case SPEED_100:
+		netif_info(jme, link, jme->dev, "Setting advertised speed to 100/10");
 		advert = (advert|ADVERTISE_100HALF|ADVERTISE_100FULL);
 		advert2 = advert2 & ~(ADVERTISE_1000HALF|ADVERTISE_1000FULL);
 		break;
 	default:
+		netif_info(jme, link, jme->dev, "Setting advertised speed to 10");
 		advert = advert & ~(ADVERTISE_100HALF|ADVERTISE_100FULL);
 		advert2 = advert2 & ~(ADVERTISE_1000HALF|ADVERTISE_1000FULL);
 	}
@@ -3440,7 +3447,11 @@ static const struct net_device_ops jme_netdev_ops = {
 };
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
 static int __devinit
+#else
+static int
+#endif
 jme_init_one(struct pci_dev *pdev,
 	     const struct pci_device_id *ent)
 {
@@ -3513,8 +3524,13 @@ jme_init_one(struct pci_dev *pdev,
 						NETIF_F_SG |
 						NETIF_F_TSO |
 						NETIF_F_TSO6 |
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
 						NETIF_F_HW_VLAN_TX |
 						NETIF_F_HW_VLAN_RX;
+#else
+						NETIF_F_HW_VLAN_CTAG_TX |
+						NETIF_F_HW_VLAN_CTAG_RX;
+#endif
 	if (using_dac)
 		netdev->features	|=	NETIF_F_HIGHDMA;
 
@@ -3728,7 +3744,11 @@ err_out:
 	return rc;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
 static void __devexit
+#else
+static void
+#endif
 jme_remove_one(struct pci_dev *pdev)
 {
 	struct net_device *netdev = pci_get_drvdata(pdev);
@@ -3899,7 +3919,11 @@ static struct pci_driver jme_driver = {
 	.name           = DRV_NAME,
 	.id_table       = jme_pci_tbl,
 	.probe          = jme_init_one,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
 	.remove         = __devexit_p(jme_remove_one),
+#else
+	.remove         = jme_remove_one,
+#endif
 	.shutdown       = jme_shutdown,
 #ifndef JME_NEW_PM_API
 	.suspend        = jme_suspend,
