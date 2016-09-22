@@ -27,7 +27,7 @@
 #include <linux/interrupt.h>
 
 #define DRV_NAME	"jme"
-#define DRV_VERSION	"1.0.8"
+#define DRV_VERSION	"1.0.8.5-jmmod"
 #define PFX		DRV_NAME ": "
 
 #define PCI_DEVICE_ID_JMICRON_JMC250	0x0250
@@ -43,6 +43,15 @@
 	NETIF_MSG_TX_ERR | \
 	NETIF_MSG_HW)
 
+#ifndef pr_err
+#define pr_err(fmt, arg...) \
+	printk(KERN_ERR fmt, ##arg)
+#endif
+#ifndef netdev_err
+#define netdev_err(netdev, fmt, arg...) \
+	pr_err(fmt, ##arg)
+#endif
+
 #ifdef TX_DEBUG
 #define tx_dbg(priv, fmt, args...)					\
 	printk(KERN_DEBUG "%s: " fmt, (priv)->dev->name, ##args)
@@ -52,6 +61,55 @@ do {									\
 	if (0)								\
 		printk(KERN_DEBUG "%s: " fmt, (priv)->dev->name, ##args); \
 } while (0)
+#endif
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,33)
+#define jme_msg(msglvl, type, priv, fmt, args...) \
+	if (netif_msg_##type(priv)) \
+		printk(msglvl "%s: " fmt, (priv)->dev->name, ## args)
+
+#define msg_probe(priv, fmt, args...) \
+	jme_msg(KERN_INFO, probe, priv, fmt, ## args)
+
+#define msg_link(priv, fmt, args...) \
+	jme_msg(KERN_INFO, link, priv, fmt, ## args)
+
+#define msg_intr(priv, fmt, args...) \
+	jme_msg(KERN_INFO, intr, priv, fmt, ## args)
+
+#define msg_rx_err(priv, fmt, args...) \
+	jme_msg(KERN_ERR, rx_err, priv, fmt, ## args)
+
+#define msg_rx_status(priv, fmt, args...) \
+	jme_msg(KERN_INFO, rx_status, priv, fmt, ## args)
+
+#define msg_tx_err(priv, fmt, args...) \
+	jme_msg(KERN_ERR, tx_err, priv, fmt, ## args)
+
+#define msg_tx_done(priv, fmt, args...) \
+	jme_msg(KERN_INFO, tx_done, priv, fmt, ## args)
+
+#define msg_tx_queued(priv, fmt, args...) \
+	jme_msg(KERN_INFO, tx_queued, priv, fmt, ## args)
+
+#define msg_hw(priv, fmt, args...) \
+	jme_msg(KERN_ERR, hw, priv, fmt, ## args)
+
+#ifndef netif_info
+#define netif_info(priv, type, dev, fmt, args...) \
+	msg_ ## type(priv, fmt, ## args)
+#endif
+#ifndef netif_err
+#define netif_err(priv, type, dev, fmt, args...) \
+	msg_ ## type(priv, fmt, ## args)
+#endif
+#endif
+
+#ifndef NETIF_F_TSO6
+#define NETIF_F_TSO6 0
+#endif
+#ifndef NETIF_F_IPV6_CSUM
+#define NETIF_F_IPV6_CSUM 0
 #endif
 
 /*
@@ -102,6 +160,7 @@ enum jme_spi_op_bits {
 };
 
 #define HALF_US 500	/* 500 ns */
+#define JMESPIIOCTL	SIOCDEVPRIVATE
 
 #define PCI_PRIV_PE1		0xE4
 
@@ -388,10 +447,75 @@ struct jme_ring {
 	atomic_t nr_free;
 };
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+#define false 0
+#define true 0
+#define netdev_alloc_skb(dev, len) dev_alloc_skb(len)
+#define PCI_VENDOR_ID_JMICRON           0x197B
+#endif
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,19)
+#define PCI_VDEVICE(vendor, device)             \
+        PCI_VENDOR_ID_##vendor, (device),       \
+        PCI_ANY_ID, PCI_ANY_ID, 0, 0
+#endif
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,21)
+#define NET_STAT(priv) priv->stats
+#define NETDEV_GET_STATS(netdev, fun_ptr) \
+	netdev->get_stats = fun_ptr
+#define DECLARE_NET_DEVICE_STATS struct net_device_stats stats;
+/*
+ * CentOS 5.2 have *_hdr helpers back-ported
+ */
+#ifdef RHEL_RELEASE_CODE
+#if RHEL_RELEASE_CODE < RHEL_RELEASE_VERSION(5,2)
+#define __DEFINE_IPHDR_HELPERS__
+#endif
+#else
+#define __DEFINE_IPHDR_HELPERS__
+#endif
+#else
 #define NET_STAT(priv) (priv->dev->stats)
 #define NETDEV_GET_STATS(netdev, fun_ptr)
 #define DECLARE_NET_DEVICE_STATS
+#endif
 
+#ifdef __DEFINE_IPHDR_HELPERS__
+static inline struct iphdr *ip_hdr(const struct sk_buff *skb)
+{
+	return skb->nh.iph;
+}
+
+static inline struct ipv6hdr *ipv6_hdr(const struct sk_buff *skb)
+{
+	return skb->nh.ipv6h;
+}
+
+static inline struct tcphdr *tcp_hdr(const struct sk_buff *skb)
+{
+	return skb->h.th;
+}
+#endif
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,23)
+#define DECLARE_NAPI_STRUCT
+#define NETIF_NAPI_SET(dev, napis, pollfn, q) \
+	dev->poll = pollfn; \
+	dev->weight = q;
+#define JME_NAPI_HOLDER(holder) struct net_device *holder
+#define JME_NAPI_WEIGHT(w) int *w
+#define JME_NAPI_WEIGHT_VAL(w) *w
+#define JME_NAPI_WEIGHT_SET(w, r) *w = r
+#define DECLARE_NETDEV struct net_device *netdev = jme->dev;
+#define JME_RX_COMPLETE(dev, napis) netif_rx_complete(dev)
+#define JME_NAPI_ENABLE(priv) netif_poll_enable(priv->dev);
+#define JME_NAPI_DISABLE(priv) netif_poll_disable(priv->dev);
+#define JME_RX_SCHEDULE_PREP(priv) \
+	netif_rx_schedule_prep(priv->dev)
+#define JME_RX_SCHEDULE(priv) \
+	__netif_rx_schedule(priv->dev);
+#else
 #define DECLARE_NAPI_STRUCT struct napi_struct napi;
 #define NETIF_NAPI_SET(dev, napis, pollfn, q) \
 	netif_napi_add(dev, napis, pollfn, q);
@@ -399,6 +523,7 @@ struct jme_ring {
 #define JME_NAPI_WEIGHT(w) int w
 #define JME_NAPI_WEIGHT_VAL(w) w
 #define JME_NAPI_WEIGHT_SET(w, r)
+#define DECLARE_NETDEV
 #define JME_RX_COMPLETE(dev, napis) napi_complete(napis)
 #define JME_NAPI_ENABLE(priv) napi_enable(&priv->napi);
 #define JME_NAPI_DISABLE(priv) \
@@ -408,6 +533,18 @@ struct jme_ring {
 	napi_schedule_prep(&priv->napi)
 #define JME_RX_SCHEDULE(priv) \
 	__napi_schedule(&priv->napi);
+#endif
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,38)
+#define JME_NEW_PM_API
+#endif
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,26)
+static inline __u32 ethtool_cmd_speed(struct ethtool_cmd *ep)
+{
+	return ep->speed;
+}
+#endif
 
 /*
  * Jmac Adapter Private data
@@ -427,6 +564,7 @@ struct jme_adapter {
 	struct tasklet_struct	txclean_task;
 	struct tasklet_struct	linkch_task;
 	struct tasklet_struct	pcc_task;
+	struct work_struct 	LC_task;
 	unsigned long		flags;
 	u32			reg_txcs;
 	u32			reg_txpfc;
@@ -450,6 +588,7 @@ struct jme_adapter {
 	u32			msg_enable;
 	struct ethtool_cmd	old_ecmd;
 	unsigned int		old_mtu;
+	struct vlan_group	*vlgrp;
 	struct dynpcc_info	dpi;
 	atomic_t		intr_sem;
 	atomic_t		link_changing;
@@ -457,13 +596,32 @@ struct jme_adapter {
 	atomic_t		rx_cleaning;
 	atomic_t		rx_empty;
 	int			(*jme_rx)(struct sk_buff *skb);
+	spinlock_t		asd_lock;
+	u8			flag_run_asd;
+	u32			media_cnct_sec;
+	u8			media_cnct;
+	struct timer_list	asd_timer;
+	int			(*jme_vlan_rx)(struct sk_buff *skb,
+					  struct vlan_group *grp,
+					  unsigned short vlan_tag);
 	DECLARE_NAPI_STRUCT
 	DECLARE_NET_DEVICE_STATS
 };
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,21)
+static struct net_device_stats *
+jme_get_stats(struct net_device *netdev)
+{
+	struct jme_adapter *jme = netdev_priv(netdev);
+	return &jme->stats;
+}
+#endif
+
 enum jme_flags_bits {
 	JME_FLAG_MSI		= 1,
 	JME_FLAG_SSET		= 2,
+	JME_FLAG_TXCSUM		= 3,
+	JME_FLAG_TSO		= 4,
 	JME_FLAG_POLL		= 5,
 	JME_FLAG_SHUTDOWN	= 6,
 };
@@ -472,6 +630,15 @@ enum jme_flags_bits {
 #define JME_REG_LEN		0x500
 #define MAX_ETHERNET_JUMBO_PACKET_SIZE 9216
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,23)
+static inline struct jme_adapter*
+jme_napi_priv(struct net_device *holder)
+{
+	struct jme_adapter *jme;
+	jme = netdev_priv(holder);
+	return jme;
+}
+#else
 static inline struct jme_adapter*
 jme_napi_priv(struct napi_struct *napi)
 {
@@ -479,6 +646,7 @@ jme_napi_priv(struct napi_struct *napi)
 	jme = container_of(napi, struct jme_adapter, napi);
 	return jme;
 }
+#endif
 
 /*
  * MMaped I/O Resters
@@ -730,7 +898,7 @@ enum jme_rxcs_values {
 	RXCS_RETRYCNT_60	= 0x00000F00,
 
 	RXCS_DEFAULT		= RXCS_FIFOTHTP_128T |
-				  RXCS_FIFOTHNP_16QW |
+				  RXCS_FIFOTHNP_128QW |
 				  RXCS_DMAREQSZ_128B |
 				  RXCS_RETRYGAP_256ns |
 				  RXCS_RETRYCNT_32,
@@ -762,20 +930,20 @@ enum jme_rxmcs_bits {
 
 /*	Extern PHY common register 2	*/
 
-#define PHY_GAD_TEST_MODE_1			0x00002000
-#define PHY_GAD_TEST_MODE_MSK			0x0000E000
-#define JM_PHY_SPEC_REG_READ			0x00004000
-#define JM_PHY_SPEC_REG_WRITE			0x00008000
-#define PHY_CALIBRATION_DELAY			20
+#define PHY_GAD_TEST_MODE_1                  	0x00002000       	//BIT_13 GIGA Test mode 1
+#define PHY_GAD_TEST_MODE_MSK               	0x0000E000    		//BIT_13_15 GIGA Test mode mask
+#define JM_PHY_SPEC_REG_READ                  	0x00004000		//BIT_14
+#define JM_PHY_SPEC_REG_WRITE                 	0x00008000		//BIT_15
+#define PHY_CALIBRATION_DELAY           	20		 	// 20 milliseconds
 #define JM_PHY_SPEC_ADDR_REG			0x1E
 #define JM_PHY_SPEC_DATA_REG			0x1F
 
 #define JM_PHY_EXT_COMM_0_REG			0x30
-#define JM_PHY_EXT_COMM_1_REG			0x31
+#define JM_PHY_EXT_COMM_1_REG               	0x31
 #define JM_PHY_EXT_COMM_2_REG			0x32
-#define JM_PHY_EXT_COMM_2_CALI_ENABLE		0x01
-#define JM_PHY_EXT_COMM_2_CALI_MODE_0		0x02
-#define JM_PHY_EXT_COMM_2_CALI_LATCH		0x10
+#define JM_PHY_EXT_COMM_2_CALI_ENABLE		0x01			//BIT_0
+#define JM_PHY_EXT_COMM_2_CALI_MODE_0		0x02			//BIT_1
+#define JM_PHY_EXT_COMM_2_CALI_LATCH		0x10			//BIT_4
 #define PCI_PRIV_SHARE_NICCTRL			0xF5
 #define JME_FLAG_PHYEA_ENABLE			0x2
 
@@ -905,6 +1073,14 @@ enum jme_phy_pwr_bit_masks {
 				       * 0: xtl_out = phy_giga.A_XTL25_O
 				       * 1: xtl_out = phy_giga.PD_OSC
 				       */
+};
+
+/*
+ * False carrier Counter
+ */
+enum jme_phy_an_status {
+	PHY_SPEC_STATUS_AN_COMPLETE		= 0x00000800,
+	PHY_SPEC_STATUS_AN_FAIL			= 0x00008000,
 };
 
 /*
@@ -1277,3 +1453,4 @@ static void jme_set_unicastaddr(struct net_device *netdev);
 static void jme_set_multi(struct net_device *netdev);
 
 #endif
+
